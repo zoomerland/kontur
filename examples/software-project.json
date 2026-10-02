@@ -1,0 +1,91 @@
+{
+  "id": "demo-software",
+  "name": "Demo software release",
+  "type": "software",
+  "description": "Synthetic software example. Git and model integration are optional.",
+  "archived": false,
+  "roadmap": {
+    "version": 1,
+    "updatedAt": "2026-10-01T12:00:00Z",
+    "baseline": {
+      "summary": "A fictional plan with explicit acceptance criteria."
+    },
+    "focusNote": "Implement the accepted scope before publishing. All data is synthetic.",
+    "currentGateId": "prepare",
+    "nextGateId": null,
+    "activeGateIds": [
+      "agree",
+      "prepare",
+      "plant"
+    ],
+    "sections": [
+      {
+        "id": "planning",
+        "title": "Define the release",
+        "scope": "mvp",
+        "gates": [
+          {
+            "id": "agree",
+            "title": "Accept the release requirements",
+            "status": "done",
+            "acceptance": "Requirements and acceptance criteria are approved.",
+            "note": "Reported accepted in this fictional example.",
+            "startedAt": "2026-09-20",
+            "completedAt": "2026-09-22",
+            "publishedAt": "2026-09-22",
+            "evidence": [
+              {
+                "label": "Example meeting note",
+                "path": "example-only/meeting-note"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "delivery",
+        "title": "Build and validate",
+        "description": "Work starts after the group has accepted the plan.",
+        "scope": "mvp",
+        "dependsOn": [
+          "planning"
+        ],
+        "gates": [
+          {
+            "id": "prepare",
+            "title": "Implement the feature",
+            "status": "active",
+            "acceptance": "Implementation passes the agreed checks.",
+            "dependsOn": [
+              "agree"
+            ],
+            "startedAt": "2026-09-23"
+          },
+          {
+            "id": "plant",
+            "title": "Publish the release",
+            "status": "planned",
+            "acceptance": "The owner accepts the tested release.",
+            "dependsOn": [
+              "prepare"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "later",
+        "title": "Possible expansion",
+        "scope": "expansion",
+        "gates": [
+          {
+            "id": "compost",
+            "title": "Add a compost area",
+            "status": "deferred",
+            "acceptance": "The group agrees the design and maintenance owner.",
+            "note": "Outside the current active plan."
+          }
+        ]
+      }
+    ]
+  }
+}

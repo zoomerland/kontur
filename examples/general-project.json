@@ -1,0 +1,43 @@
+{
+  "id": "community-garden",
+  "name": "Community garden",
+  "type": "general",
+  "description": "Synthetic example: organize a small community garden without AI or Git.",
+  "archived": false,
+  "roadmap": {
+    "version": 1,
+    "updatedAt": "2026-10-01T12:00:00Z",
+    "baseline": {"summary": "A fictional plan with explicit acceptance criteria."},
+    "focusNote": "Prepare the beds before planting. This example contains no real project data.",
+    "currentGateId": "prepare",
+    "nextGateId": null,
+    "activeGateIds": ["agree", "prepare", "plant"],
+    "sections": [
+      {
+        "id": "planning",
+        "title": "Agree the plan",
+        "scope": "mvp",
+        "gates": [
+          {"id": "agree", "title": "Agree location and responsibilities", "status": "done", "acceptance": "The group accepts the location, budget and responsibilities.", "note": "Reported accepted in this fictional example.", "startedAt": "2026-09-20", "completedAt": "2026-09-22", "publishedAt": "2026-09-22", "evidence": [{"label": "Example meeting note", "path": "example-only/meeting-note"}]}
+        ]
+      },
+      {
+        "id": "delivery",
+        "title": "Prepare and plant",
+        "description": "Work starts after the group has accepted the plan.",
+        "scope": "mvp",
+        "dependsOn": ["planning"],
+        "gates": [
+          {"id": "prepare", "title": "Prepare the beds", "status": "active", "acceptance": "Beds are marked, cleared and checked by the group.", "dependsOn": ["agree"], "startedAt": "2026-09-23"},
+          {"id": "plant", "title": "Plant the first seeds", "status": "planned", "acceptance": "Seeds are planted and a watering schedule is agreed.", "dependsOn": ["prepare"]}
+        ]
+      },
+      {
+        "id": "later",
+        "title": "Possible expansion",
+        "scope": "expansion",
+        "gates": [{"id": "compost", "title": "Add a compost area", "status": "deferred", "acceptance": "The group agrees the design and maintenance owner.", "note": "Outside the current active plan."}]
+      }
+    ]
+  }
+}

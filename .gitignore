@@ -1,0 +1,10 @@
+.venv/
+.private/
+data/
+__pycache__/
+.pytest_cache/
+output/
+.playwright-cli/
+*.zip
+.env
+*.sqlite3*
