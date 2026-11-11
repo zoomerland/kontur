@@ -58,8 +58,12 @@ function setSync(state){syncState=state;if(state==='m16')lastRefresh=new Date();
 async function api(path, options={}) {
   const requestKey=key, sharedAuth=authSnapshot();
   let response,body;
-  try{response=await fetch('/api/v1'+path, {...options,headers:{Authorization:'Bearer '+requestKey,'Content-Type':'application/json',...options.headers}});}catch{throw new Error(t('networkError'));}
-  try{body=await response.json();}catch{throw new Error(t('responseError'));}
+  try{response=await fetch('/api/v1'+path, {...options,headers:{Authorization:'Bearer '+requestKey,'Content-Type':'application/json',...options.headers}});}catch{
+    throw Object.assign(new Error(t('networkError')), {noResponse:true});
+  }
+  try{body=await response.json();}catch{
+    throw Object.assign(new Error(t('responseError')), {unreadableStatus:response.status});
+  }
   if(key!==requestKey || authSnapshot()!==sharedAuth){reloadAuth();throw new Error(t("m11"));}
   if (!response.ok) {
     if (response.status===401) {$('gate-dialog')?.close();current=null;projects=[];key=''; await forgetKey(sharedAuth); $('login').hidden=false; $('dashboard').hidden=true; $('empty').hidden=true; $('projects').replaceChildren();}
@@ -682,6 +686,7 @@ $('language-select').addEventListener('change',event=>KonturI18n.setLanguage(eve
 window.addEventListener('kontur-language-change',()=>{
   paintTheme(activeTheme());paintSync();notice(lastNotice);
   if(key&&$('login').hidden)render();
+  paintImportPreview();
 });
 $('login-form').addEventListener('submit',e=>{e.preventDefault();key=$('token').value.trim();$('token').value='';refresh();});
 $('logout').addEventListener('click',async()=>{loggingOut=true;key='';await forgetKey();location.reload();});
@@ -696,9 +701,311 @@ window.addEventListener('storage',event=>{
 function newProject(){if(!key){notice(t("m258"));return;}$('create-dialog').showModal();}
 $('new-project').addEventListener('click',newProject);$('empty-add').addEventListener('click',newProject);$('cancel-create').addEventListener('click',()=>$('create-dialog').close());
 $('create-form').addEventListener('submit',async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{current=await api('/projects',{method:'POST',body:JSON.stringify({id:$('new-id').value,name:$('new-name').value,type:$('new-type').value})});$('create-dialog').close();$('create-form').reset();await refresh();}catch(error){$('create-dialog').close();notice(error.message);}finally{button.disabled=false;}});
-function projectBody(){const {name,type,description,archived,roadmap}=current;return {name,type,description,archived,roadmap};}
+function projectBody(project=current){const {name,type,description,archived,roadmap}=project;return {name,type,description,archived,roadmap};}
+
+function sameJson(left,right){
+  if(left===right)return true;
+  if(!left||!right||typeof left!=='object'||typeof right!=='object'||Array.isArray(left)!==Array.isArray(right))return false;
+  const keys=Object.keys(left);
+  return keys.length===Object.keys(right).length&&keys.every(key=>Object.hasOwn(right,key)&&sameJson(left[key],right[key]));
+}
+
+function importBody(data,base){
+  if(Object.hasOwn(data,'sections'))return {...projectBody(base),roadmap:data};
+  const {id,stats,revision,updatedAt,...body}=data;
+  return body;
+}
+
+function isJsonRecord(value){
+  return value!==null&&typeof value==='object'&&!Array.isArray(value);
+}
+
+// Match the defaults in ProjectInput and its nested models for comparison only.
+function importComparisonBody(body){
+  const project={description:'',archived:false,roadmap:{},...body};
+  if(!isJsonRecord(project.roadmap))return project;
+
+  const roadmap={
+    version:1,updatedAt:'',baseline:{},focusNote:'',currentGateId:null,nextGateId:null,
+    activeGateIds:[],sections:[],...project.roadmap
+  };
+  if(isJsonRecord(roadmap.baseline))roadmap.baseline={ref:'',commit:'',summary:'',...roadmap.baseline};
+  if(Array.isArray(roadmap.sections)){
+    roadmap.sections=roadmap.sections.map(section=>{
+      if(!isJsonRecord(section))return section;
+      const block={description:'',scope:'expansion',status:null,dependsOn:[],gates:[],...section};
+      if(Array.isArray(block.gates)){
+        block.gates=block.gates.map(gate=>isJsonRecord(gate)?{
+          status:'planned',acceptance:'',existing:'',note:'',dependsOn:[],sources:[],evidence:[],
+          completedAt:null,startedAt:null,publishedAt:null,...gate
+        }:gate);
+      }
+      return block;
+    });
+  }
+  return {...project,roadmap};
+}
+
+function importEntities(items){
+  if(!Array.isArray(items))return null;
+  const byId=new Map();
+  for(const item of items){
+    if(typeof item?.id!=='string'||!item.id||byId.has(item.id))return null;
+    byId.set(item.id,item);
+  }
+  return byId;
+}
+
+function importDiff(before,after){
+  const changes=[];
+  function compare(oldValue,newValue,path){
+    if(sameJson(oldValue,newValue))return;
+    const field=path.at(-1);
+    if(field==='sections'||field==='gates'){
+      const oldItems=importEntities(oldValue),newItems=importEntities(newValue);
+      if(oldItems&&newItems){
+        const oldOrder=[...oldItems.keys()];
+        const newOrder=[...newItems.keys()];
+        if(!sameJson(oldOrder,newOrder))changes.push({path:[...path,{key:'importOrder'}],oldValue:oldOrder,newValue:newOrder});
+        const label=field==='sections'?'importBlock':'importGate';
+        for(const id of new Set([...oldItems.keys(),...newItems.keys()])){
+          compare(oldItems.get(id),newItems.get(id),[...path.slice(0,-1),{key:label,values:{id}}]);
+        }
+        return;
+      }
+    }
+    if(isJsonRecord(oldValue)&&isJsonRecord(newValue)){
+      for(const key of new Set([...Object.keys(oldValue),...Object.keys(newValue)])){
+        const oldField=Object.hasOwn(oldValue,key)?oldValue[key]:undefined;
+        const newField=Object.hasOwn(newValue,key)?newValue[key]:undefined;
+        compare(oldField,newField,[...path,key]);
+      }
+      return;
+    }
+    changes.push({path,oldValue,newValue});
+  }
+  compare(before,after,[]);
+  return changes;
+}
+
+function renderImportChange({path,oldValue,newValue}){
+  const label=path.map(part=>typeof part==='string'?part:t(part.key,part.values)).join(' / ');
+  const field=path.at(-1)?.key;
+  const entity=field==='importBlock'||field==='importGate';
+  const heading=oldValue===undefined?'importAdded':newValue!==undefined?'importEdited':entity?'importRemoved':'importOmitted';
+  const before=oldValue===undefined?t('importAbsent'):JSON.stringify(oldValue,null,2);
+  const after=newValue!==undefined?JSON.stringify(newValue,null,2):t(entity?'importAbsent':'importDefault');
+  const title=`<strong>${esc(label)}</strong> <small>${esc(t(heading))}</small>`;
+  const values=`<div class="import-values"><div><small>${esc(t('importBefore'))}</small><pre>${esc(before)}</pre></div><div><small>${esc(t('importAfter'))}</small><pre>${esc(after)}</pre></div></div>`;
+  const complex=field!=='importOrder'&&[oldValue,newValue].some(value=>value!==null&&typeof value==='object');
+  return `<li>${complex?`<details><summary>${title}</summary>${values}</details>`:title+values}</li>`;
+}
+
+const importDialog=$('import-dialog');
+let importDraft=null;
+
+function checkImportSession(draft){
+  if(!draft.requestKey||key!==draft.requestKey||authSnapshot()!==draft.sharedAuth)throw new Error(t('m11'));
+}
+
+async function readImportProject(draft,minimumRevision){
+  checkImportSession(draft);
+  const latest=await api(draft.path,{cache:'no-store',signal:AbortSignal.timeout(15000)});
+  checkImportSession(draft);
+  if(latest?.id!==draft.projectId||!Number.isSafeInteger(latest.revision)||latest.revision<minimumRevision||!latest.roadmap||!latest.stats){
+    throw new Error(t('responseError'));
+  }
+  return latest;
+}
+
+function paintImportPreview(){
+  if(!importDraft)return;
+  const {preview,file,writing,status,readFailed,pendingReadBack}=importDraft;
+  $('import-summary').textContent=preview?t('importPreviewBase',{project:preview.base.name,file,revision:preview.base.revision}):file;
+  $('import-status').textContent=status?t(status):'';
+  $('import-diff').innerHTML=preview?preview.changes.map(renderImportChange).join(''):'';
+  $('confirm-import').disabled=writing||!preview?.changes.length;
+  $('cancel-import').disabled=writing;
+  $('reload-import').hidden=writing||status==='importLoading'||(!readFailed&&!pendingReadBack);
+}
+
+async function loadImportPreview(draft,observed){
+  draft.preview=null;
+  draft.readFailed=false;
+  draft.status='importLoading';
+  paintImportPreview();
+  try{
+    const base=observed??await readImportProject(draft,draft.minimumRevision);
+    if(importDraft!==draft)return;
+    const body=importBody(draft.data,base);
+    const serialized=JSON.stringify(body);
+    const comparison=importComparisonBody(body);
+    const changes=importDiff(projectBody(base),comparison);
+    draft.preview={base,comparison,serialized,changes};
+    draft.status=changes.length?(draft.rebased?'importReconfirm':''):'importNoChanges';
+  }catch{
+    if(importDraft!==draft)return;
+    draft.readFailed=true;
+    draft.status='importReadFailed';
+  }
+  paintImportPreview();
+}
+
+function closeImport(){
+  importDraft=null;
+  if(importDialog.open)importDialog.close();
+  $('import').disabled=false;
+}
+
+function showReadBackProject(latest){
+  const cached=projects.find(project=>project.id===latest.id);
+  const observed=cached?.revision>latest.revision?cached:latest;
+  projects=projects.map(project=>project.id===observed.id?observed:project);
+  if(current?.id===observed.id){
+    current=observed;
+    render();
+  }
+  return observed;
+}
+
+function keepImportReadOnly(draft,preview){
+  draft.preview=null;
+  draft.pendingReadBack=preview;
+  draft.status='importOutcomeUnknown';
+}
+
+async function reconcileImport(draft,preview,latest){
+  const observed=showReadBackProject(latest);
+  const {archived,roadmap}=preview.comparison;
+  // Noncanonical values can be coerced by the API. A read alone cannot settle their outcome.
+  if(observed.revision<=preview.base.revision||typeof archived!=='boolean'||roadmap?.version!==1){
+    keepImportReadOnly(draft,preview);
+    return;
+  }
+  if(sameJson(preview.comparison,projectBody(observed))){
+    closeImport();
+    notice(t('importVerified'));
+    return;
+  }
+  draft.pendingReadBack=null;
+  draft.minimumRevision=preview.base.revision+1;
+  draft.rebased=true;
+  await loadImportPreview(draft,observed);
+}
+
+function uncertainImportWrite(error){
+  const status=error.status??error.unreadableStatus;
+  return error.noResponse||status===408||status===504||(error.unreadableStatus>=200&&error.unreadableStatus<300);
+}
+
+async function writeJsonImport(draft,{base,serialized}){
+  const revision=base.revision;
+  const options={method:'PUT',headers:{'If-Match':String(revision)},body:serialized};
+  const unknown=()=>Object.assign(new Error(t('importOutcomeUnknown')),{importOutcomeUnknown:true});
+  function put(){
+    checkImportSession(draft);
+    return api(draft.path,{...options,signal:AbortSignal.timeout(15000)});
+  }
+  async function readBack(){
+    checkImportSession(draft);
+    try{return await readImportProject(draft,revision);}
+    catch{throw unknown();}
+  }
+  try{await put();return null;}
+  catch(error){if(!uncertainImportWrite(error))throw error;}
+
+  let latest=await readBack();
+  if(latest.revision===revision){
+    // The original If-Match also protects against a write that finishes after this GET.
+    try{await put();return null;}
+    catch(error){if(!uncertainImportWrite(error)&&(error.status??error.unreadableStatus)!==409)throw error;}
+    latest=await readBack();
+  }
+  if(latest.revision===revision)throw unknown();
+  return latest;
+}
+
 $('export').addEventListener('click',()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify({id:current.id,...projectBody()},null,2)],{type:'application/json'}));a.download=current.id+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);});
 $('import').addEventListener('click',()=>$('import-file').click());
-$('import-file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;const target=current;try{if(f.size>2_000_000)throw Error(t("m259"));const data=JSON.parse(await f.text());if(data.id&&data.id!==target.id)throw Error(t("m260"));const body=data.sections?{name:target.name,type:target.type,description:target.description,archived:target.archived,roadmap:data}:data;delete body.id;delete body.stats;delete body.revision;delete body.updatedAt;if(!confirm(t('importConfirm',{project:target.name,file:f.name})))return;await api('/projects/'+target.id,{method:'PUT',headers:{'If-Match':String(target.revision)},body:JSON.stringify(body)});await refresh();notice(t("m264"));}catch(error){notice(error instanceof SyntaxError?t('invalidJson'):error.message);}finally{e.target.value='';}});
-refresh();setInterval(()=>{if(key&&!document.hidden&&!$('create-dialog').open&&!$('gate-dialog')?.open&&!$('visual-dialog')?.open)refresh(true);},60000);
+$('import-file').addEventListener('change',async event=>{
+  const input=event.target,file=input.files[0],button=$('import');
+  input.value='';
+  if(!file||!current||button.disabled)return;
+  const target=current,requestKey=key,sharedAuth=authSnapshot();
+  button.disabled=true;
+  try{
+    if(file.size>2_000_000)throw new Error(t('m259'));
+    const data=JSON.parse(await file.text());
+    if(!data||typeof data!=='object'||Array.isArray(data))throw new Error(t('importObjectRequired'));
+    if(data.id&&data.id!==target.id)throw new Error(t('m260'));
+    const draft={projectId:target.id,path:'/projects/'+target.id,minimumRevision:target.revision,requestKey,sharedAuth,file:file.name,data};
+    checkImportSession(draft);
+    importDraft=draft;
+    const loading=loadImportPreview(draft);
+    importDialog.showModal();
+    await loading;
+  }catch(error){
+    closeImport();
+    notice(error instanceof SyntaxError?t('invalidJson'):error.message);
+  }
+});
+
+$('cancel-import').addEventListener('click',()=>{if(!importDraft?.writing)closeImport();});
+importDialog.addEventListener('cancel',event=>{
+  event.preventDefault();
+  if(!importDraft?.writing)closeImport();
+});
+$('reload-import').addEventListener('click',async()=>{
+  const draft=importDraft;
+  if(!draft||draft.writing||draft.status==='importLoading')return;
+  const preview=draft.pendingReadBack;
+  if(!preview){
+    if(draft.readFailed)await loadImportPreview(draft);
+    return;
+  }
+
+  draft.status='importLoading';
+  paintImportPreview();
+  try{
+    const latest=await readImportProject(draft,preview.base.revision);
+    if(importDraft!==draft)return;
+    await reconcileImport(draft,preview,latest);
+  }catch{
+    if(importDraft===draft)keepImportReadOnly(draft,preview);
+  }
+  paintImportPreview();
+});
+$('confirm-import').addEventListener('click',async()=>{
+  const draft=importDraft,preview=draft?.preview;
+  if(!preview?.changes.length||draft.writing)return;
+  draft.writing=true;
+  draft.status='importApplying';
+  paintImportPreview();
+  try{
+    const latest=await writeJsonImport(draft,preview);
+    if(!latest){
+      closeImport();
+      await refresh();
+      notice(t('m264'));
+      return;
+    }
+    await reconcileImport(draft,preview,latest);
+  }catch(error){
+    if((error.status??error.unreadableStatus)===409){
+      draft.minimumRevision=preview.base.revision+1;
+      draft.rebased=true;
+      await loadImportPreview(draft);
+    }else if(error.importOutcomeUnknown){
+      keepImportReadOnly(draft,preview);
+    }else{
+      closeImport();
+      notice(error.message);
+    }
+  }finally{
+    draft.writing=false;
+    paintImportPreview();
+    if(importDraft===draft)$('cancel-import').focus();
+  }
+});
+refresh();setInterval(()=>{if(key&&!document.hidden&&!$('create-dialog').open&&!$('gate-dialog')?.open&&!$('visual-dialog')?.open&&!importDialog.open)refresh(true);},60000);
 });

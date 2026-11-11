@@ -25,7 +25,7 @@ for(const locale of i18n.supported){
     if(locale!=='ru')assert.doesNotMatch(dictionaries[locale][key],/[А-Яа-яЁё]/,`${locale}:${key} contains untranslated Russian`);
   }
   i18n.setLanguage(locale);assert.equal(doc.documentElement.lang,locale);assert.equal(storage.get('kontur-language'),locale);
-  assert.equal(i18n.t('importConfirm',{project:'<Тест {file}>',file:'示例.json'}).includes('<Тест {file}>'),true);
+  assert.equal(i18n.t('importPreviewBase',{project:'<Тест {file}>',file:'示例.json',revision:4}).includes('<Тест {file}>'),true);
 }
 for(const file of ['static/app.js','static/index.html']){
   const text=fs.readFileSync(path.join(root,file),'utf8');

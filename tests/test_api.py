@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
@@ -82,6 +83,45 @@ def test_crud_revision_history_and_persistence(client):
     assert client.put('/api/v1/projects/demo', json=body, headers={'If-Match': '1'}).json()['revision'] == 2
     assert client.get('/api/v1/projects/demo/history/1').json()['name'] == 'Пример'
     assert len(client.get('/api/v1/projects/demo/history').json()) == 2
+
+
+@pytest.mark.parametrize(('request_headers', 'expected_status'), [
+    pytest.param({'Content-Type': 'text/plain'}, 422, id='text-plain'),
+    pytest.param({}, 422, id='no-content-type'),
+    pytest.param({'Content-Type': 'application/json', 'Host': 'evil.example'}, 400, id='foreign-host'),
+])
+def test_rejected_write_headers_leave_project_and_history_unchanged(client, request_headers, expected_status):
+    client.post('/api/v1/projects', json=sample()).raise_for_status()
+    url = '/api/v1/projects/demo'
+    history_url = url + '/history'
+    before = client.get(url).raise_for_status().json()
+    history_before = client.get(history_url).raise_for_status().json()
+    revision = before['revision']
+    version_url = f'{history_url}/{revision}'
+    version_before = client.get(version_url).raise_for_status().json()
+
+    body = sample()
+    body.pop('id')
+    body['name'] = 'Новое имя'
+    content = json.dumps(body, ensure_ascii=False).encode('utf-8')
+    headers = {'If-Match': str(revision)}
+    request = client.build_request('PUT', url, content=content, headers={**headers, **request_headers})
+    assert request.headers.get('Content-Type') == request_headers.get('Content-Type')
+    assert request.headers['Host'] == request_headers.get('Host', 'localhost')
+    assert client.send(request).status_code == expected_status
+
+    assert client.get(url).raise_for_status().json() == before
+    assert client.get(history_url).raise_for_status().json() == history_before
+    assert client.get(version_url).raise_for_status().json() == version_before
+
+    accepted = client.put(url, content=content, headers={**headers, 'Content-Type': 'application/json'})
+    assert accepted.status_code == 200
+    updated = client.get(url).raise_for_status().json()
+    assert updated['name'] == body['name']
+    assert updated['revision'] == revision + 1
+    history_after = client.get(history_url).raise_for_status().json()
+    assert history_after[0]['revision'] == revision + 1
+    assert history_after[1:] == history_before
 
 
 def test_reopen_database(tmp_path):

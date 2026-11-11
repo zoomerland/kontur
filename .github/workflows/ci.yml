@@ -22,4 +22,5 @@ jobs:
       - run: node --check static/app.js
       - run: node --check static/i18n.js
       - run: node tests/localization.test.cjs
+      - run: node --test tests/json-import.test.cjs
 
